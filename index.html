@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ReticolAI — image forensics analysis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;500&family=Archivo:wght@400;600&family=Spline+Sans+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#10151B; --panel:#171E26; --line:#26303B;
+    --ink:#E9EEF2; --dim:#8C9AA8;
+    --real:#5FC9FF;      /* "real" verdict color */
+    --ai:#FF7A59;        /* "AI" verdict color */
+    --radius:10px;
+  }
+  *{box-sizing:border-box; margin:0}
+  html{color-scheme:dark}
+  body{
+    background:
+      repeating-linear-gradient(0deg, transparent 0 31px, rgba(140,154,168,.05) 31px 32px),
+      repeating-linear-gradient(90deg, transparent 0 31px, rgba(140,154,168,.05) 31px 32px),
+      var(--bg);
+    color:var(--ink);
+    font-family:"Archivo",system-ui,sans-serif;
+    font-size:15px; line-height:1.55;
+    min-height:100vh;
+    display:flex; flex-direction:column;
+  }
+  main{width:min(920px,100% - 40px); margin:0 auto; flex:1}
+
+  header{padding:34px 0 22px; display:flex; align-items:baseline; gap:16px; flex-wrap:wrap}
+  .brand{font-family:"Unbounded"; font-weight:500; font-size:20px; letter-spacing:.14em}
+  .brand .ai{color:var(--ai)}
+  .brand .slash{color:var(--dim); font-weight:300}
+  .tag{color:var(--dim); font-size:13px}
+
+  /* ---- upload zone ---- */
+  #drop{
+    border:1px dashed var(--line);
+    border-radius:var(--radius);
+    background:var(--panel);
+    padding:46px 24px;
+    text-align:center;
+    cursor:pointer;
+    transition:border-color .15s, background .15s;
+  }
+  #drop.over{border-color:var(--real); background:#1A2531}
+  #drop:focus-visible{outline:2px solid var(--real); outline-offset:3px}
+  #drop .big{font-size:17px; font-weight:600}
+  #drop .hint{color:var(--dim); font-size:13px; margin-top:6px}
+
+  /* ---- status line ---- */
+  #status{
+    font-family:"Spline Sans Mono",monospace;
+    font-size:12.5px; color:var(--dim);
+    margin:12px 2px 0; min-height:1.4em;
+  }
+  #status.err{color:var(--ai)}
+  #bar{height:2px; background:var(--line); border-radius:2px; margin-top:6px; overflow:hidden}
+  #bar i{display:block; height:100%; width:0%; background:var(--real); transition:width .2s}
+
+  /* ---- results ---- */
+  #results{display:none; margin-top:26px; gap:22px;
+           grid-template-columns:minmax(0,1.15fr) minmax(0,1fr)}
+  #results.show{display:grid}
+  @media (max-width:720px){ #results.show{grid-template-columns:1fr} }
+
+  .panel{background:var(--panel); border:1px solid var(--line);
+         border-radius:var(--radius); padding:16px}
+  .panel h2{font-size:11px; font-weight:600; letter-spacing:.18em;
+            text-transform:uppercase; color:var(--dim); margin-bottom:12px}
+
+  #previewWrap canvas{width:100%; height:auto; display:block; border-radius:6px}
+  .caption{color:var(--dim); font-size:12px; margin-top:10px}
+  .caption b{color:var(--ink); font-weight:600}
+
+  #verdict{font-family:"Unbounded"; font-weight:300; font-size:24px;
+           line-height:1.25; margin-bottom:4px}
+  #verdict b{font-weight:500}
+  #verdict.v-ai b{color:var(--ai)}
+  #verdict.v-real b{color:var(--real)}
+  #verdict.v-unsure b{color:var(--dim)}
+  #confNote{color:var(--dim); font-size:12.5px; margin-bottom:16px}
+
+  .bars{display:flex; flex-direction:column; gap:10px}
+  .row{display:grid; grid-template-columns:1fr auto; gap:8px; align-items:baseline}
+  .row .name{font-size:13.5px}
+  .row .pct{font-family:"Spline Sans Mono",monospace; font-size:13px}
+  .track{grid-column:1 / -1; height:6px; background:var(--line);
+         border-radius:3px; overflow:hidden}
+  .fill{height:100%; width:0%; border-radius:3px; background:var(--dim);
+        transition:width .45s cubic-bezier(.2,.7,.2,1)}
+  .fill.c-real{background:var(--real)} .fill.c-ai{background:var(--ai)}
+
+  .divider{border:0; border-top:1px solid var(--line); margin:18px 0}
+
+  #meta{font-family:"Spline Sans Mono",monospace; font-size:12px;
+        color:var(--dim); margin-top:18px; line-height:1.7}
+
+  footer{width:min(920px,100% - 40px); margin:34px auto 22px;
+         color:var(--dim); font-size:12px; border-top:1px solid var(--line);
+         padding-top:14px}
+
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none !important}
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand">Reticol<span class="ai">AI</span><span class="slash"> /</span></div>
+    <div class="tag">real or AI-generated? — runs locally, your image never leaves the browser</div>
+  </header>
+
+  <div id="drop" tabindex="0" role="button"
+       aria-label="Upload an image to analyze">
+    <div class="big">Drop an image here</div>
+    <div class="hint">or click to choose one, or paste it (Ctrl+V)</div>
+  </div>
+  <input type="file" id="file" accept="image/*" hidden>
+
+  <div id="status" role="status">Loading the model…</div>
+  <div id="bar"><i></i></div>
+
+  <section id="results">
+    <div class="panel" id="previewWrap">
+      <h2>Grid overlay</h2>
+      <canvas id="preview"></canvas>
+      <div class="caption">Each zone is a 224×224 window analyzed at
+        native resolution; the number is its <b>p(AI)</b> as a percentage.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Result</h2>
+      <div id="verdict"></div>
+      <div id="confNote"></div>
+
+      <div class="bars" id="fakeBars"></div>
+      <hr class="divider">
+      <h2>Estimated post-processing</h2>
+      <div class="bars" id="trBars"></div>
+
+      <div id="meta"></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Multi-task MaxViT-T model (fp16) running via onnxruntime-web ·
+  trained on RRDataset (Li et al., ICCV 2025) · probabilities between
+  40–60% are flagged as uncertain.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.min.js"></script>
+<script>
+/* =========================================================================
+   Class order must match the label indices used in training.
+   ========================================================================= */
+const MODEL_URL = "./model_fp16.onnx";
+const FAKE_CLASSES = ["real", "AI"];      // FAKE_MAP = {real:0, ai:1}
+const AI_INDEX = 1;
+const TR_CLASSES = ["original", "transmitted", "re-digitized"];  // TRANSFORM_MAP = {original:0, transfer:1, redigital:2}
+const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225];
+const PATCH = 224;      // analysis window size (matches the training crop)
+const GRID = 3;         // up to 3×3 zones per image
+/* ========================================================================= */
+
+const $ = id => document.getElementById(id);
+const statusEl = $("status"), barEl = document.querySelector("#bar i");
+let session = null, epName = null, busy = false, pendingFile = null;
+
+function setStatus(msg, isErr = false) {
+  statusEl.textContent = msg;
+  statusEl.classList.toggle("err", isErr);
+}
+function setProgress(f) { barEl.style.width = (f * 100).toFixed(1) + "%"; }
+
+/* ---------- model loading (with progress) ---------- */
+async function loadModel() {
+  try {
+    ort.env.wasm.wasmPaths =
+      "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+    const resp = await fetch(MODEL_URL);
+    if (!resp.ok) throw new Error("file not found: " + MODEL_URL);
+    const total = +resp.headers.get("Content-Length") || 0;
+    const reader = resp.body.getReader();
+    const chunks = []; let recv = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); recv += value.length;
+      setStatus(`Downloading the model… ${(recv / 1e6).toFixed(0)} MB` +
+                (total ? ` / ${(total / 1e6).toFixed(0)} MB` : ""));
+      if (total) setProgress(recv / total);
+    }
+    const buf = new Uint8Array(recv);
+    let off = 0; for (const c of chunks) { buf.set(c, off); off += c.length; }
+
+    for (const ep of [["webgpu"], ["wasm"]]) {
+      try {
+        session = await ort.InferenceSession.create(buf, {
+          executionProviders: ep });
+        epName = ep[0] === "webgpu" ? "WebGPU" : "WASM (CPU)";
+        break;
+      } catch (e) { console.warn("execution provider not available: " + ep[0], e); }
+    }
+    if (!session) throw new Error("ONNX Runtime failed to initialize");
+
+    setProgress(1);
+    setStatus(`Model ready · ${epName}` +
+      (epName.startsWith("WASM")
+        ? " — without WebGPU this will be slow (use a recent Chrome/Edge)"
+        : ""));
+    if (pendingFile) { const f = pendingFile; pendingFile = null; handleFile(f); }
+  } catch (e) {
+    console.error(e);
+    setStatus("The model failed to load: " + e.message +
+      ". Make sure model_fp16.onnx sits next to index.html and that the " +
+      "page is served over http (not opened as a local file).", true);
+  }
+}
+
+/* ---------- image input ---------- */
+const drop = $("drop"), fileInput = $("file");
+drop.addEventListener("click", () => fileInput.click());
+drop.addEventListener("keydown", e => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
+fileInput.addEventListener("change", () => {
+  if (fileInput.files[0]) handleFile(fileInput.files[0]);
+  fileInput.value = "";
+});
+["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+  e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => {
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) handleFile(f);
+});
+document.addEventListener("paste", e => {
+  for (const item of e.clipboardData.items) {
+    if (item.type.startsWith("image/")) { handleFile(item.getAsFile()); return; }
+  }
+});
+
+async function decode(file) {
+  try { return await createImageBitmap(file, { imageOrientation: "from-image" }); }
+  catch (_) { /* option unsupported, or an unusual format */ }
+  try { return await createImageBitmap(file); }
+  catch (_) {
+    return new Promise((res, rej) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { URL.revokeObjectURL(url); res(img); };
+      img.onerror = () => { URL.revokeObjectURL(url);
+        rej(new Error("format not readable by the browser (e.g. HEIC): " +
+                      "convert it to JPG or PNG")); };
+      img.src = url;
+    });
+  }
+}
+
+async function handleFile(file) {
+  if (!file || !file.type.startsWith("image/") && !/\.(jpe?g|png|webp)$/i.test(file.name || "")) {
+    setStatus("That file isn't an image.", true); return;
+  }
+  if (!session) { pendingFile = file;
+    setStatus("Image queued — I'll analyze it as soon as the model is ready…"); return; }
+  if (busy) return;
+  busy = true;
+  try {
+    setStatus("Analyzing…");
+    const bmp = await decode(file);
+    await analyze(bmp);
+  } catch (e) {
+    console.error(e);
+    setStatus("Analysis failed: " + e.message, true);
+  } finally { busy = false; }
+}
+
+/* ---------- extract 224×224 zones at native resolution ---------- */
+function gridOffsets(size) {
+  if (size <= PATCH) return [Math.floor((size - PATCH) / 2)]; // symmetric padding
+  const n = Math.min(GRID, Math.max(1, Math.ceil(size / PATCH)));
+  if (n === 1) return [Math.round((size - PATCH) / 2)];
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(Math.round(i * (size - PATCH) / (n - 1)));
+  return [...new Set(out)];
+}
+
+function extractPatch(bmp, ox, oy) {
+  const c = document.createElement("canvas");
+  c.width = c.height = PATCH;
+  const g = c.getContext("2d", { willReadFrequently: true });
+  g.fillStyle = "#000"; g.fillRect(0, 0, PATCH, PATCH);   // black fill = pixel value 0, matches pad_if_needed in training
+  const sx = Math.max(0, ox), sy = Math.max(0, oy);
+  const dx = sx - ox, dy = sy - oy;
+  const sw = Math.min(bmp.width, ox + PATCH) - sx;
+  const sh = Math.min(bmp.height, oy + PATCH) - sy;
+  if (sw > 0 && sh > 0) g.drawImage(bmp, sx, sy, sw, sh, dx, dy, sw, sh);
+  return g.getImageData(0, 0, PATCH, PATCH);
+}
+
+function toTensor(imgs) {
+  const N = imgs.length, plane = PATCH * PATCH;
+  const t = new Float32Array(N * 3 * plane);
+  imgs.forEach((im, n) => {
+    const p = im.data, base = n * 3 * plane;
+    for (let i = 0; i < plane; i++) {
+      t[base + i]             = (p[i*4]     / 255 - MEAN[0]) / STD[0];
+      t[base + plane + i]     = (p[i*4 + 1] / 255 - MEAN[1]) / STD[1];
+      t[base + 2*plane + i]   = (p[i*4 + 2] / 255 - MEAN[2]) / STD[2];
+    }
+  });
+  return new ort.Tensor("float32", t, [N, 3, PATCH, PATCH]);
+}
+
+const softmax = a => {
+  const m = Math.max(...a);
+  const e = a.map(v => Math.exp(v - m));
+  const s = e.reduce((x, y) => x + y, 0);
+  return e.map(v => v / s);
+};
+const rows = (flat, N, C) =>
+  Array.from({ length: N }, (_, n) => softmax(
+    Array.from({ length: C }, (_, c) => flat[n * C + c])));
+const mean = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+
+/* ---------- inference + rendering ---------- */
+async function analyze(bmp) {
+  const xs = gridOffsets(bmp.width), ys = gridOffsets(bmp.height);
+  const patches = [], rects = [];
+  for (const oy of ys) for (const ox of xs) {
+    patches.push(extractPatch(bmp, ox, oy));
+    rects.push([ox, oy]);
+  }
+
+  const t0 = performance.now();
+  const out = await session.run({ [session.inputNames[0]]: toTensor(patches) });
+  const ms = performance.now() - t0;
+
+  // match heads by output width, not name: [N,2]=real/AI, [N,3]=transform
+  let fakeT = null, trT = null;
+  for (const name of session.outputNames) {
+    const o = out[name];
+    if (o.dims[1] === FAKE_CLASSES.length) fakeT = o;
+    else if (o.dims[1] === TR_CLASSES.length) trT = o;
+  }
+  if (!fakeT || !trT) throw new Error("unexpected model output");
+
+  const N = patches.length;
+  const pf = rows(fakeT.data, N, FAKE_CLASSES.length);
+  const pt = rows(trT.data, N, TR_CLASSES.length);
+  const pAIs = pf.map(r => r[AI_INDEX]);
+  const avgFake = FAKE_CLASSES.map((_, c) => mean(pf.map(r => r[c])));
+  const avgTr = TR_CLASSES.map((_, c) => mean(pt.map(r => r[c])));
+
+  renderOverlay(bmp, rects, pAIs);
+  renderReadout(avgFake, avgTr, pAIs, N, ms);
+  $("results").classList.add("show");
+  setStatus(`Done · ${epName}`);
+}
+
+function renderOverlay(bmp, rects, pAIs) {
+  const cv = $("preview");
+  const maxW = 1100;
+  const s = Math.min(1, maxW / bmp.width);
+  cv.width = Math.round(bmp.width * s);
+  cv.height = Math.round(bmp.height * s);
+  const g = cv.getContext("2d");
+  g.drawImage(bmp, 0, 0, cv.width, cv.height);
+
+  const css = getComputedStyle(document.documentElement);
+  const cReal = css.getPropertyValue("--real").trim();
+  const cAI = css.getPropertyValue("--ai").trim();
+  const fs = Math.max(11, Math.round(13 * Math.min(1, s * 2)));
+  g.font = `500 ${fs}px "Spline Sans Mono", monospace`;
+  g.textBaseline = "top"; g.lineWidth = 1.5;
+
+  rects.forEach(([ox, oy], i) => {
+    const x = ox * s, y = oy * s, w = PATCH * s, h = PATCH * s;
+    const p = pAIs[i], col = p > 0.5 ? cAI : cReal;
+    g.strokeStyle = col;
+    g.globalAlpha = 0.9;
+    g.strokeRect(Math.max(0, x) + .5, Math.max(0, y) + .5,
+                 Math.min(w, cv.width) - 1, Math.min(h, cv.height) - 1);
+    const label = Math.round(p * 100) + "";
+    const pad = 3, tw = g.measureText(label).width;
+    g.globalAlpha = 0.75; g.fillStyle = "#10151B";
+    g.fillRect(Math.max(0, x) + 3, Math.max(0, y) + 3, tw + pad * 2, fs + pad * 2 - 2);
+    g.globalAlpha = 1; g.fillStyle = col;
+    g.fillText(label, Math.max(0, x) + 3 + pad, Math.max(0, y) + 3 + pad - 1);
+  });
+  g.globalAlpha = 1;
+}
+
+function barRow(name, p, colorClass) {
+  const row = document.createElement("div"); row.className = "row";
+  row.innerHTML =
+    `<span class="name">${name}</span>` +
+    `<span class="pct">${(p * 100).toFixed(1)}%</span>` +
+    `<div class="track"><div class="fill ${colorClass}"></div></div>`;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    row.querySelector(".fill").style.width = (p * 100).toFixed(1) + "%";
+  }));
+  return row;
+}
+
+function renderReadout(avgFake, avgTr, pAIs, N, ms) {
+  const pAI = avgFake[AI_INDEX];
+  const v = $("verdict");
+  v.className = "";
+  if (pAI >= 0.6) { v.classList.add("v-ai");
+    v.innerHTML = `likely <b>AI-generated</b>`; }
+  else if (pAI <= 0.4) { v.classList.add("v-real");
+    v.innerHTML = `likely <b>real</b>`; }
+  else { v.classList.add("v-unsure");
+    v.innerHTML = `<b>uncertain</b>`; }
+  $("confNote").textContent = `average p(AI) across analyzed zones: ` +
+    `${(pAI * 100).toFixed(1)}%`;
+
+  const fb = $("fakeBars"); fb.innerHTML = "";
+  avgFake.forEach((p, c) => fb.appendChild(
+    barRow(FAKE_CLASSES[c], p, c === AI_INDEX ? "c-ai" : "c-real")));
+
+  const tb = $("trBars"); tb.innerHTML = "";
+  avgTr.forEach((p, c) => tb.appendChild(barRow(TR_CLASSES[c], p, "")));
+
+  let meta = `${N} zone${N === 1 ? "" : "s"} · ${ms.toFixed(0)} ms · ` +
+             `${epName} · fp16`;
+  if (N > 1) {
+    const mn = Math.min(...pAIs), mx = Math.max(...pAIs);
+    meta += `<br>zone agreement: p(AI) from ${(mn*100).toFixed(0)}% to ` +
+            `${(mx*100).toFixed(0)}%` +
+            (mx - mn > 0.35 ? " — zones disagree: check the grid" : "");
+  }
+  $("meta").innerHTML = meta;
+}
+
+loadModel();
+</script>
+</body>
+</html>
